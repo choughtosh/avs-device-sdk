@@ -17,12 +17,18 @@
 
 #include <memory>
 
+#include <iostream>
+
 #include <AVSCommon/Utils/Logger/Logger.h>
 
 #include "Sensory/SensoryKeywordDetector.h"
 
 namespace alexaClientSDK {
 namespace kwd {
+
+using std::cout;
+using std::endl;
+using std::cin;
 
 using namespace avsCommon::utils::logger;
 
@@ -126,6 +132,21 @@ static std::string getSensoryDetails(SnsrSession session, SnsrRC result) {
     return message;
 }
 
+static SnsrRC showAvailablePoint(SnsrSession s, const char *key, void *privateData)
+{
+  SnsrRC r;
+  int point;
+
+  r = snsrGetInt(s, SNSR_RES_AVAILABLE_POINT, &point);
+  if (r == SNSR_RC_OK) {
+    ACSDK_INFO(LX("").d("SNSR_OPERATING_POINT", point));
+    *((int*)privateData) = *((int*)privateData)+1;
+  }
+  return r;
+
+}
+
+
 SnsrRC SensoryKeywordDetector::keyWordDetectedCallback(SnsrSession s, const char* key, void* userData) {
     SensoryKeywordDetector* engine = static_cast<SensoryKeywordDetector*>(userData);
     SnsrRC result;
@@ -216,6 +237,10 @@ SensoryKeywordDetector::SensoryKeywordDetector(
 }
 
 bool SensoryKeywordDetector::init(const std::string& modelFilePath) {
+    int numSearchPoints = 0;
+    int point;
+    int newpoint;
+
     m_streamReader = m_stream->createReader(AudioInputStream::Reader::Policy::BLOCKING);
     if (!m_streamReader) {
         ACSDK_ERROR(LX("initFailed").d("reason", "createStreamReaderFailed"));
@@ -255,8 +280,35 @@ bool SensoryKeywordDetector::init(const std::string& modelFilePath) {
         ACSDK_ERROR(
             LX("initFailed").d("reason", "loadingSensoryModelFailed").d("error", getSensoryDetails(m_session, result)));
         return false;
+    }    
+
+    // Report on the operating point of the model    
+    result = snsrGetInt(m_session, SNSR_OPERATING_POINT, &point);
+    if (result == SNSR_RC_SETTING_NOT_FOUND || result == SNSR_RC_VALUE_NOT_SET) {
+      snsrClearRC(m_session);
+    } else {
+        ACSDK_INFO(LX("Sensory operating point").d("SNSR_OPERATING_POINT", point));
+        snsrForEach(m_session, SNSR_OPERATING_POINT_LIST, snsrCallback(showAvailablePoint, NULL, &numSearchPoints));
     }
 
+    if(numSearchPoints > 1) {
+        
+        cout << "Which operating point do you want to use?" << endl;
+        cin >> newpoint;
+        result = snsrSetInt(m_session, SNSR_OPERATING_POINT, newpoint);
+        if (result != SNSR_RC_OK) {
+            ACSDK_ERROR(LX("Set Operating point failed").d("error", getSensoryDetails(m_session, result)));
+            return false;
+        }
+        // Report on the operating point of the model    
+        result = snsrGetInt(m_session, SNSR_OPERATING_POINT, &point);
+        if (result == SNSR_RC_SETTING_NOT_FOUND || result == SNSR_RC_VALUE_NOT_SET) {
+            snsrClearRC(m_session);
+        } else {
+            ACSDK_INFO(LX("Sensory operating point").d("SNSR_OPERATING_POINT", point)); 
+        }
+    }
+    
     result = snsrRequire(m_session, SNSR_TASK_TYPE, SNSR_PHRASESPOT);
     if (result != SNSR_RC_OK) {
         ACSDK_ERROR(LX("initFailed")
@@ -265,6 +317,7 @@ bool SensoryKeywordDetector::init(const std::string& modelFilePath) {
                         .d("error", getSensoryDetails(m_session, result)));
         return false;
     }
+
 
     if (!setUpRuntimeSettings(&m_session)) {
         return false;
